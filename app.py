@@ -256,13 +256,16 @@ def download_file(job_id):
         
         if status['status'] == 'completed':
             output_file = status['output_file']
-            file_path = os.path.join(app.config['DOWNLOAD_FOLDER'], f"{job_id}_{output_file}")
+            # The output_file already has the job_id prefix, so use it directly
+            file_path = os.path.join(app.config['DOWNLOAD_FOLDER'], output_file)
             
             print(f"Looking for file: {file_path}")
             print(f"File exists: {os.path.exists(file_path)}")
             
             if os.path.exists(file_path):
-                print(f"Sending file: {output_file}")
+                # Create a clean filename for download (remove job_id prefix)
+                clean_filename = output_file.replace(f"{job_id}_", "")
+                print(f"Sending file as: {clean_filename}")
                 
                 # Simple file response
                 def generate():
@@ -277,13 +280,13 @@ def download_file(job_id):
                     generate(),
                     mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                     headers={
-                        'Content-Disposition': f'attachment; filename="{output_file}"',
+                        'Content-Disposition': f'attachment; filename="{clean_filename}"',
                         'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
                     }
                 )
             else:
                 print("File not found on disk")
-                return jsonify({'error': f'File not found: {file_path}'}), 404
+                return jsonify({'error': f'File not found: {output_file}'}), 404
         else:
             print(f"Job not completed. Status: {status['status']}")
             return jsonify({'error': f'Conversion not completed. Status: {status["status"]}'}), 400
