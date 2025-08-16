@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF to Word OCR Converter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 40px;
+            max-width: 600px;
+            width: 90%;
+            text-align: center;
+        }
+
+        .header {
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            margin: 30px 0;
+            background: #f8f9ff;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #e8ebff;
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        .upload-text {
+            font-size: 1.2em;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .upload-subtext {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .progress-container {
+            display: none;
+            margin: 30px 0;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            color: #333;
+            margin: 10px 0;
+        }
+
+        .result-container {
+            display: none;
+            margin: 30px 0;
+        }
+
+        .success {
+            color: #27ae60;
+            font-size: 1.2em;
+            margin: 20px 0;
+        }
+
+        .error {
+            color: #e74c3c;
+            font-size: 1.1em;
+            margin: 20px 0;
+        }
+
+        .stats {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: left;
+        }
+
+        .stats h3 {
+            color: #333;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .stat-label {
+            font-weight: 600;
+            color: #555;
+        }
+
+        .stat-value {
+            color: #333;
+        }
+
+        .features {
+            margin: 30px 0;
+            text-align: left;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            margin: 15px 0;
+            color: #555;
+        }
+
+        .feature-icon {
+            color: #667eea;
+            margin-right: 15px;
+            font-size: 1.2em;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                margin: 20px;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .upload-area {
+                padding: 30px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔄 PDF to Word OCR</h1>
+            <p>Convert PDF files to Word documents with text extraction from images</p>
+        </div>
+
+        <div class="upload-area" onclick="document.getElementById('fileInput').click();">
+            <div class="upload-icon">📄</div>
+            <div class="upload-text">Click to select PDF file</div>
+            <div class="upload-subtext">or drag and drop your PDF here</div>
+            <input type="file" id="fileInput" class="file-input" accept=".pdf">
+        </div>
+
+        <button class="btn" id="uploadBtn" onclick="uploadFile()" disabled>
+            🚀 Convert to Word
+        </button>
+
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-text" id="progressText">Preparing conversion...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div id="progressPercent">0%</div>
+        </div>
+
+        <div class="result-container" id="resultContainer">
+            <div id="resultMessage"></div>
+            <div class="stats" id="statsContainer" style="display: none;">
+                <h3>📊 Conversion Statistics</h3>
+                <div class="stat-item">
+                    <span class="stat-label">Total Pages:</span>
+                    <span class="stat-value" id="statPages">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Pages with Text:</span>
+                    <span class="stat-value" id="statTextPages">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Total Words:</span>
+                    <span class="stat-value" id="statWords">-</span>
+                </div>
+            </div>
+            <button class="btn" id="downloadBtn" onclick="downloadFile()" style="display: none;">
+                📥 Download Word Document
+            </button>
+        </div>
+
+        <div class="features">
+            <h3 style="text-align: center; color: #333; margin-bottom: 20px;">✨ Features</h3>
+            <div class="feature-item">
+                <span class="feature-icon">🔍</span>
+                <span>Extracts text from both regular text and images using OCR</span>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">📝</span>
+                <span>Converts all pages with professional Word formatting</span>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">⚡</span>
+                <span>Fast processing with real-time progress tracking</span>
+            </div>
+            <div class="feature-item">
+                <span class="feature-icon">🔒</span>
+                <span>Secure processing - files are automatically cleaned up</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFile = null;
+        let currentJobId = null;
+
+        // File input handling
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file && file.type === 'application/pdf') {
+                selectedFile = file;
+                document.querySelector('.upload-text').textContent = `Selected: ${file.name}`;
+                document.querySelector('.upload-subtext').textContent = `Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+                document.getElementById('uploadBtn').disabled = false;
+                
+                // Reset previous results
+                resetResults();
+            } else {
+                alert('Please select a valid PDF file.');
+                resetFileSelection();
+            }
+        });
+
+        // Drag and drop handling
+        const uploadArea = document.querySelector('.upload-area');
+
+        uploadArea.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', function(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.type === 'application/pdf') {
+                    selectedFile = file;
+                    document.getElementById('fileInput').files = files;
+                    document.querySelector('.upload-text').textContent = `Selected: ${file.name}`;
+                    document.querySelector('.upload-subtext').textContent = `Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+                    document.getElementById('uploadBtn').disabled = false;
+                    resetResults();
+                } else {
+                    alert('Please select a valid PDF file.');
+                }
+            }
+        });
+
+        function resetFileSelection() {
+            selectedFile = null;
+            document.querySelector('.upload-text').textContent = 'Click to select PDF file';
+            document.querySelector('.upload-subtext').textContent = 'or drag and drop your PDF here';
+            document.getElementById('uploadBtn').disabled = true;
+            document.getElementById('fileInput').value = '';
+        }
+
+        function resetResults() {
+            document.getElementById('progressContainer').style.display = 'none';
+            document.getElementById('resultContainer').style.display = 'none';
+            document.getElementById('progressFill').style.width = '0%';
+            document.getElementById('progressPercent').textContent = '0%';
+        }
+
+        function uploadFile() {
+            if (!selectedFile) {
+                alert('Please select a PDF file first.');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('pdf_file', selectedFile);
+
+            // Show progress container
+            document.getElementById('progressContainer').style.display = 'block';
+            document.getElementById('uploadBtn').disabled = true;
+            document.getElementById('uploadBtn').textContent = '🔄 Converting...';
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showError(data.error);
+                } else {
+                    currentJobId = data.job_id;
+                    checkProgress();
+                }
+            })
+            .catch(error => {
+                showError('Upload failed: ' + error.message);
+            });
+        }
+
+        function checkProgress() {
+            if (!currentJobId) return;
+
+            fetch(`/progress/${currentJobId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                // Update progress
+                document.getElementById('progressText').textContent = data.message;
+                document.getElementById('progressFill').style.width = data.progress + '%';
+                document.getElementById('progressPercent').textContent = data.progress + '%';
+
+                if (data.status === 'completed') {
+                    showSuccess(data);
+                } else if (data.status === 'error') {
+                    showError(data.message);
+                } else {
+                    // Continue checking progress
+                    setTimeout(checkProgress, 1000);
+                }
+            })
+            .catch(error => {
+                showError('Progress check failed: ' + error.message);
+            });
+        }
+
+        function showSuccess(data) {
+            document.getElementById('resultContainer').style.display = 'block';
+            document.getElementById('resultMessage').innerHTML = `
+                <div class="success">✅ Conversion completed successfully!</div>
+                <p>If download doesn't start automatically, <a href="/download/${currentJobId}" target="_blank">click here to download</a></p>
+            `;
+            
+            // Show stats
+            const stats = data.stats;
+            if (stats) {
+                document.getElementById('statPages').textContent = stats.total_pages;
+                document.getElementById('statTextPages').textContent = stats.pages_with_text;
+                document.getElementById('statWords').textContent = stats.total_words;
+                document.getElementById('statsContainer').style.display = 'block';
+            }
+            
+            document.getElementById('downloadBtn').style.display = 'inline-block';
+            
+            // Reset upload button
+            document.getElementById('uploadBtn').disabled = false;
+            document.getElementById('uploadBtn').textContent = '🚀 Convert to Word';
+        }
+
+        function showError(message) {
+            document.getElementById('resultContainer').style.display = 'block';
+            document.getElementById('resultMessage').innerHTML = `<div class="error">❌ ${message}</div>`;
+            
+            // Reset upload button
+            document.getElementById('uploadBtn').disabled = false;
+            document.getElementById('uploadBtn').textContent = '🚀 Convert to Word';
+            
+            // Hide progress
+            document.getElementById('progressContainer').style.display = 'none';
+        }
+
+        function downloadFile() {
+            if (currentJobId) {
+                // Create a temporary link element and click it
+                const downloadLink = document.createElement('a');
+                downloadLink.href = `/download/${currentJobId}`;
+                downloadLink.download = ''; // Let the server specify the filename
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+                
+                // Also try window.location as backup
+                setTimeout(() => {
+                    window.location.href = `/download/${currentJobId}`;
+                }, 1000);
+            }
+        }
+    </script>
+</body>
+</html>
