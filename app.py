@@ -83,81 +83,134 @@ def extract_text_from_page(page):
     regular_text = page.get_text().strip()
     image_text = ""
     
+    # First, try to get images from the page
     try:
         image_list = page.get_images()
         print(f"Found {len(image_list)} images on page")
         
         for img_index, img in enumerate(image_list):
-            xref = img[0]
-            pix = fitz.Pixmap(page.parent, xref)
-            print(f"Processing image {img_index + 1}, colorspace: {pix.n}, alpha: {pix.alpha}")
-            
-            if pix.n - pix.alpha < 4:
-                img_data = pix.tobytes("png")
-                pil_image = Image.open(io.BytesIO(img_data))
-                print(f"Image size: {pil_image.size}, mode: {pil_image.mode}")
+            try:
+                xref = img[0]
                 
-                # Try different OCR configurations
-                ocr_configs = [
-                    '--psm 6',
-                    '--psm 4',
-                    '--psm 3',
-                    '--psm 1'
-                ]
+                # Try to extract the image
+                base_image = page.parent.extract_image(xref)
+                image_bytes = base_image["image"]
+                image_ext = base_image["ext"]
                 
-                ocr_text = ""
-                for config in ocr_configs:
+                print(f"Image {img_index + 1}: format={image_ext}, size={len(image_bytes)} bytes")
+                
+                # Convert to PIL Image
+                pil_image = Image.open(io.BytesIO(image_bytes))
+                print(f"PIL Image - Size: {pil_image.size}, Mode: {pil_image.mode}")
+                
+                # Save debug image (optional)
+                debug_mode = os.getenv('DEBUG_IMAGES', 'false').lower() == 'true'
+                if debug_mode:
                     try:
+                        debug_filename = f"debug_image_{img_index + 1}.png"
+                        pil_image.save(debug_filename)
+                        print(f"Debug image saved as {debug_filename}")
+                    except:
+                        pass
+                
+                # Convert to RGB if necessary
+                if pil_image.mode != 'RGB':
+                    pil_image = pil_image.convert('RGB')
+                    print(f"Converted to RGB mode")
+                
+                # Enhance image for better OCR
+                # Resize if too small
+                if pil_image.size[0] < 300 or pil_image.size[1] < 300:
+                    scale_factor = max(300 / pil_image.size[0], 300 / pil_image.size[1])
+                    new_size = (int(pil_image.size[0] * scale_factor), int(pil_image.size[1] * scale_factor))
+                    pil_image = pil_image.resize(new_size, Image.Resampling.LANCZOS)
+                    print(f"Resized image to: {pil_image.size}")
+                
+                # Try different OCR approaches
+                ocr_results = []
+                
+                # Method 1: Direct OCR with different PSM modes
+                psm_modes = [6, 4, 3, 8, 11, 12, 13]
+                for psm in psm_modes:
+                    try:
+                        config = f'--psm {psm} -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
                         ocr_text = pytesseract.image_to_string(pil_image, lang="eng", config=config)
-                        if ocr_text.strip():
-                            print(f"OCR successful with config: {config}")
+                        if ocr_text.strip() and len(ocr_text.strip()) > 2:
+                            ocr_results.append((f"PSM {psm}", ocr_text.strip()))
+                            print(f"OCR with PSM {psm}: {len(ocr_text.strip())} characters")
                             break
-                    except Exception as ocr_err:
-                        print(f"OCR failed with config {config}: {str(ocr_err)}")
+                    except Exception as e:
                         continue
                 
-                if ocr_text.strip():
-                    image_text += f"\n[Text from image {img_index + 1}:]\n{ocr_text.strip()}\n"
-                    print(f"Extracted text from image {img_index + 1}: {len(ocr_text)} characters")
+                # Method 2: Try with image preprocessing
+                if not ocr_results:
+                    try:
+                        # Convert to grayscale and enhance contrast
+                        from PIL import ImageEnhance
+                        gray_image = pil_image.convert('L')
+                        enhancer = ImageEnhance.Contrast(gray_image)
+                        enhanced_image = enhancer.enhance(2.0)
+                        
+                        config = '--psm 6'
+                        ocr_text = pytesseract.image_to_string(enhanced_image, lang="eng", config=config)
+                        if ocr_text.strip():
+                            ocr_results.append(("Enhanced", ocr_text.strip()))
+                            print(f"OCR with enhancement: {len(ocr_text.strip())} characters")
+                    except Exception as e:
+                        print(f"Enhanced OCR failed: {str(e)}")
+                
+                # Method 3: Try simple OCR without config
+                if not ocr_results:
+                    try:
+                        ocr_text = pytesseract.image_to_string(pil_image)
+                        if ocr_text.strip():
+                            ocr_results.append(("Simple", ocr_text.strip()))
+                            print(f"Simple OCR: {len(ocr_text.strip())} characters")
+                    except Exception as e:
+                        print(f"Simple OCR failed: {str(e)}")
+                
+                # Use the best result
+                if ocr_results:
+                    best_method, best_text = max(ocr_results, key=lambda x: len(x[1]))
+                    image_text += f"\n[Text from image {img_index + 1} using {best_method}:]\n{best_text}\n"
+                    print(f"Successfully extracted text from image {img_index + 1}: {len(best_text)} characters")
                 else:
                     print(f"No text found in image {img_index + 1}")
-            else:
-                print(f"Skipping image {img_index + 1} (too many color channels)")
-            
-            pix = None
+                    
+            except Exception as img_error:
+                print(f"Error processing image {img_index + 1}: {str(img_error)}")
+                continue
             
     except Exception as e:
-        print(f"Error processing images: {str(e)}")
+        print(f"Error accessing images: {str(e)}")
+    
+    # Fallback: Try full page OCR if no regular text and no image text
+    if not regular_text and not image_text:
         try:
-            # Try full page OCR as fallback
-            print("Attempting full page OCR...")
-            mat = fitz.Matrix(2.0, 2.0)
+            print("Attempting full page OCR as last resort...")
+            # Render the entire page as an image
+            mat = fitz.Matrix(2.0, 2.0)  # Higher resolution
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("png")
             pil_image = Image.open(io.BytesIO(img_data))
             
-            # Try different OCR configurations for full page
-            ocr_configs = ['--psm 1', '--psm 3', '--psm 4', '--psm 6']
-            page_ocr_text = ""
-            
-            for config in ocr_configs:
+            # Try different configurations for full page
+            for psm in [1, 3, 4, 6]:
                 try:
+                    config = f'--psm {psm}'
                     page_ocr_text = pytesseract.image_to_string(pil_image, lang="eng", config=config)
-                    if page_ocr_text.strip():
-                        print(f"Full page OCR successful with config: {config}")
-                        break
-                except Exception as ocr_err:
-                    print(f"Full page OCR failed with config {config}: {str(ocr_err)}")
+                    if page_ocr_text.strip() and len(page_ocr_text.strip()) > 10:
+                        print(f"Full page OCR successful with PSM {psm}: {len(page_ocr_text)} characters")
+                        return page_ocr_text.strip(), f"Full page OCR (PSM {psm})"
+                except Exception as e:
                     continue
             
-            if len(page_ocr_text.strip()) > len(regular_text):
-                print(f"Using full page OCR result ({len(page_ocr_text)} chars vs {len(regular_text)} chars)")
-                return page_ocr_text.strip(), "Full page OCR"
+            pix = None
                 
         except Exception as ocr_error:
-            print(f"Full page OCR also failed: {str(ocr_error)}")
-            pass
+            print(f"Full page OCR failed: {str(ocr_error)}")
     
+    # Combine results
     combined_text = regular_text
     if image_text:
         combined_text = regular_text + "\n" + image_text
@@ -180,26 +233,60 @@ def test_ocr_functionality():
         from PIL import Image, ImageDraw, ImageFont
         
         # Create a white image with text
-        img = Image.new('RGB', (300, 100), color='white')
+        img = Image.new('RGB', (400, 150), color='white')
         draw = ImageDraw.Draw(img)
         
         # Try to use a font, fall back to default if not available
         try:
-            font = ImageFont.truetype("arial.ttf", 24)
+            font = ImageFont.truetype("arial.ttf", 32)
         except:
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.load_default()
+            except:
+                font = None
         
-        draw.text((10, 30), "Test OCR Text", fill='black', font=font)
+        draw.text((20, 50), "Test OCR Text 123", fill='black', font=font)
         
-        # Test OCR on this image
-        test_text = pytesseract.image_to_string(img, lang="eng", config='--psm 8')
-        print(f"OCR test result: '{test_text.strip()}'")
+        # Save test image for debugging
+        try:
+            img.save("test_ocr_image.png")
+            print("Test image saved as test_ocr_image.png")
+        except:
+            pass
         
-        if "Test" in test_text or "OCR" in test_text or "Text" in test_text:
+        # Test OCR on this image with multiple methods
+        test_results = []
+        
+        # Method 1: Different PSM modes
+        for psm in [6, 8, 7, 13]:
+            try:
+                config = f'--psm {psm}'
+                test_text = pytesseract.image_to_string(img, lang="eng", config=config)
+                if test_text.strip():
+                    test_results.append(f"PSM {psm}: '{test_text.strip()}'")
+            except Exception as e:
+                test_results.append(f"PSM {psm}: Failed - {str(e)}")
+        
+        # Method 2: Simple OCR
+        try:
+            simple_text = pytesseract.image_to_string(img)
+            if simple_text.strip():
+                test_results.append(f"Simple: '{simple_text.strip()}'")
+        except Exception as e:
+            test_results.append(f"Simple: Failed - {str(e)}")
+        
+        print("OCR test results:")
+        for result in test_results:
+            print(f"  {result}")
+        
+        # Check if any method worked
+        success_count = sum(1 for result in test_results if "Test" in result or "OCR" in result or "123" in result)
+        
+        if success_count > 0:
             print("✓ OCR is working correctly!")
             return True
         else:
-            print("✗ OCR is not working - no text detected")
+            print("✗ OCR is not working - no text detected correctly")
             return False
             
     except Exception as e:
