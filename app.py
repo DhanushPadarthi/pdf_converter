@@ -234,95 +234,35 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
                     except Exception as e:
                         continue
         
-        # Method 5: Try EasyOCR as alternative to Tesseract (optional)
+        # Method 5: Skip EasyOCR for now (too slow), try enhanced Tesseract instead
         if not ocr_results:
-            print("Tesseract failed, trying EasyOCR (if available)...")
+            print("Initial OCR failed, trying fast enhanced Tesseract...")
             try:
-                try:
-                    import easyocr
-                    easyocr_available = True
-                except ImportError:
-                    print("EasyOCR not installed, trying to install...")
-                    try:
-                        import subprocess
-                        import sys
-                        subprocess.check_call([sys.executable, "-m", "pip", "install", "easyocr>=1.7.0", "--quiet"])
-                        import easyocr
-                        easyocr_available = True
-                        print("EasyOCR installed successfully")
-                    except Exception as install_error:
-                        print(f"Could not install EasyOCR: {install_error}")
-                        easyocr_available = False
+                # Quick enhanced Tesseract configs (most likely to work)
+                fast_configs = [
+                    '--psm 6 --oem 3',
+                    '--psm 8 --oem 3',
+                    '--psm 4 --oem 3',
+                    '--psm 6 --oem 1'
+                ]
                 
-                if easyocr_available:
+                for config in fast_configs:
                     try:
-                        # Initialize EasyOCR reader with minimal settings for speed
-                        print("Initializing EasyOCR (downloading models if needed)...")
-                        reader = easyocr.Reader(['en'], gpu=False, verbose=False, download_enabled=True)
+                        # Use enhanced image
+                        gray_img = pil_image.convert('L')
+                        from PIL import ImageEnhance
+                        enhanced = ImageEnhance.Contrast(gray_img).enhance(2.5)
                         
-                        # Convert PIL image to numpy array for EasyOCR
-                        import numpy as np
-                        img_array = np.array(pil_image)
+                        ocr_text = pytesseract.image_to_string(enhanced, config=config)
+                        if ocr_text.strip() and len(ocr_text.strip()) > 1:
+                            ocr_results.append((f"Fast-Tesseract", ocr_text.strip()))
+                            print(f"Fast Tesseract worked: '{ocr_text[:30]}...'")
+                            break
+                    except Exception as te:
+                        continue
                         
-                        # Try EasyOCR with optimized settings
-                        print("Running EasyOCR text detection...")
-                        easyocr_results = reader.readtext(
-                            img_array, 
-                            detail=0,  # Only return text, not coordinates
-                            paragraph=True,  # Group text into paragraphs
-                            width_ths=0.7,  # Text width threshold
-                            height_ths=0.7,  # Text height threshold
-                            batch_size=1  # Reduce memory usage
-                        )
-                        
-                        if easyocr_results:
-                            combined_text = ' '.join(easyocr_results)
-                            if combined_text.strip():
-                                ocr_results.append(("EasyOCR", combined_text.strip()))
-                                print(f"EasyOCR successful: '{combined_text[:50]}...' ({len(combined_text)} chars)")
-                        else:
-                            print("EasyOCR completed but found no text")
-                            
-                    except Exception as e:
-                        print(f"EasyOCR processing failed: {str(e)}")
-                else:
-                    print("EasyOCR not available, skipping...")
-                
             except Exception as e:
-                print(f"EasyOCR error: {str(e)}")
-                
-            # If EasyOCR is not available or failed, try enhanced Tesseract
-            if not ocr_results:
-                print("Trying enhanced Tesseract approach...")
-                try:
-                    # Last ditch effort with very simple Tesseract config
-                    simple_configs = [
-                        '--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789',
-                        '--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
-                        '--psm 6 --oem 1',
-                        '--psm 13 --oem 3',
-                        '--psm 7 --oem 3',
-                        '--psm 11 --oem 3'
-                    ]
-                    
-                    for config in simple_configs:
-                        try:
-                            # Use a heavily processed image
-                            gray_img = pil_image.convert('L')
-                            from PIL import ImageEnhance
-                            enhanced = ImageEnhance.Contrast(gray_img).enhance(3.0)
-                            
-                            ocr_text = pytesseract.image_to_string(enhanced, config=config)
-                            if ocr_text.strip() and len(ocr_text.strip()) > 1:
-                                ocr_results.append((f"Enhanced-Tesseract", ocr_text.strip()))
-                                print(f"Enhanced Tesseract worked: '{ocr_text[:30]}...'")
-                                break
-                        except Exception as te:
-                            print(f"Config {config} failed: {str(te)}")
-                            continue
-                            
-                except Exception as e:
-                    print(f"Enhanced Tesseract also failed: {str(e)}")
+                print(f"Fast Tesseract failed: {str(e)}")
         
         # Method 6: Fallback - try to extract any visible text patterns
         if not ocr_results:
@@ -696,19 +636,63 @@ def test_ocr_functionality():
         print(f"✗ OCR test failed: {str(e)}")
         return False
 
+def extract_text_from_page_with_timeout(page, timeout_seconds=60):
+    """Extract text from page with timeout"""
+    import threading
+    import time
+    
+    result = [None]  # Use list to store result from thread
+    exception = [None]  # Store any exception
+    
+    def extraction_worker():
+        try:
+            result[0] = extract_text_from_page(page)
+        except Exception as e:
+            exception[0] = e
+    
+    # Start extraction in a separate thread
+    thread = threading.Thread(target=extraction_worker)
+    thread.daemon = True
+    thread.start()
+    
+    # Wait for completion or timeout
+    thread.join(timeout_seconds)
+    
+    if thread.is_alive():
+        # Thread is still running, extraction timed out
+        print(f"Text extraction timed out after {timeout_seconds} seconds")
+        raise TimeoutError(f"Text extraction timed out after {timeout_seconds} seconds")
+    
+    if exception[0]:
+        raise exception[0]
+    
+    if result[0] is None:
+        raise Exception("Text extraction failed for unknown reason")
+    
+    return result[0]
+
 def convert_pdf_to_word_web(pdf_path, output_path, job_id):
     """Convert PDF to Word with progress tracking for web interface"""
+    import time
+    start_time = time.time()
+    max_processing_time = 300  # 5 minutes max
+    
     try:
         conversion_status[job_id] = {
             'status': 'starting',
             'progress': 0,
             'message': 'Initializing conversion...',
             'current_page': 0,
-            'total_pages': 0
+            'total_pages': 0,
+            'start_time': start_time
         }
         
         # Setup Tesseract
         setup_tesseract()
+        
+        # Check if we're taking too long
+        if time.time() - start_time > max_processing_time:
+            raise TimeoutError("Conversion timeout - taking too long")
         
         # Open PDF
         pdf_document = fitz.open(pdf_path)
@@ -730,18 +714,49 @@ def convert_pdf_to_word_web(pdf_path, output_path, job_id):
         pages_with_ocr = 0
         
         for page_num in range(total_pages):
+            # Check timeout again
+            elapsed_time = time.time() - start_time
+            if elapsed_time > max_processing_time:
+                conversion_status[job_id].update({
+                    'status': 'error',
+                    'message': f'Conversion timeout after {elapsed_time:.1f} seconds'
+                })
+                raise TimeoutError(f"Conversion timeout after {elapsed_time:.1f} seconds")
+            
             # Update progress
             progress = int((page_num / total_pages) * 100)
             conversion_status[job_id].update({
                 'status': 'processing',
                 'progress': progress,
                 'current_page': page_num + 1,
-                'message': f'Processing page {page_num + 1} of {total_pages}...'
+                'message': f'Processing page {page_num + 1} of {total_pages}... ({elapsed_time:.1f}s elapsed)'
             })
             
-            # Extract text
+            # Extract text with timeout for individual pages
             page = pdf_document[page_num]
-            text, extraction_method, has_images, used_ocr = extract_text_from_page(page)
+            
+            try:
+                # Set a per-page timeout
+                page_start = time.time()
+                page_timeout = 60  # 1 minute per page max
+                
+                text, extraction_method, has_images, used_ocr = extract_text_from_page_with_timeout(page, page_timeout)
+                
+                page_elapsed = time.time() - page_start
+                print(f"Page {page_num + 1} processed in {page_elapsed:.1f}s using {extraction_method}")
+                
+            except TimeoutError as te:
+                print(f"Page {page_num + 1} timed out: {str(te)}")
+                text = f"[Page {page_num + 1} processing timed out - may contain complex content]"
+                extraction_method = "Timeout"
+                has_images = False
+                used_ocr = False
+            except Exception as pe:
+                print(f"Page {page_num + 1} error: {str(pe)}")
+                text = f"[Page {page_num + 1} processing failed: {str(pe)}]"
+                extraction_method = "Error"
+                has_images = False
+                used_ocr = False
             
             # Track extraction methods
             if used_ocr:
