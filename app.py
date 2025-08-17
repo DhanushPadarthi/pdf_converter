@@ -27,6 +27,45 @@ except ImportError as e:
     print("Please install: pip install flask PyMuPDF python-docx pyspellchecker pytesseract Pillow")
     sys.exit(1)
 
+# Configure Tesseract for cloud environments
+def configure_tesseract():
+    """Configure Tesseract executable path for cloud deployment"""
+    if os.name != 'nt':  # Not Windows
+        print("Cloud/Linux environment detected, configuring Tesseract...")
+        
+        # Try to find Tesseract using 'which' command
+        try:
+            result = subprocess.run(['which', 'tesseract'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                tesseract_path = result.stdout.strip()
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                print(f"Tesseract configured at: {tesseract_path}")
+                return True
+        except:
+            pass
+        
+        # Fallback to common paths
+        common_paths = [
+            "/usr/bin/tesseract",
+            "/usr/local/bin/tesseract",
+            "/app/.apt/usr/bin/tesseract",
+        ]
+        
+        for path in common_paths:
+            if os.path.exists(path):
+                pytesseract.pytesseract.tesseract_cmd = path
+                print(f"Tesseract configured at: {path}")
+                return True
+        
+        print("Tesseract not found in common paths")
+        return False
+    else:
+        print("Windows environment detected, using default Tesseract")
+        return True
+
+# Configure Tesseract on startup
+configure_tesseract()
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pdf-converter-secret-key-2025'
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -80,6 +119,9 @@ def setup_tesseract():
 
 def process_image_with_ocr(pil_image, image_name="unknown"):
     """Process a PIL image with OCR using multiple methods"""
+    import os  # Ensure os is available in function scope
+    import platform
+    
     try:
         print(f"Processing {image_name} - Size: {pil_image.size}, Mode: {pil_image.mode}")
         
@@ -111,99 +153,15 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
         # Try different OCR approaches
         ocr_results = []
         
-        # Check if Tesseract is available first
+        # Check if Tesseract is available
         tesseract_available = True
         try:
-            # Test Tesseract installation
+            # Simple test - Tesseract should already be configured
             test_result = pytesseract.get_tesseract_version()
-            print(f"Tesseract version: {test_result}")
-            
-            # Test with a simple image
-            test_img = Image.new('RGB', (100, 30), color='white')
-            from PIL import ImageDraw, ImageFont
-            draw = ImageDraw.Draw(test_img)
-            try:
-                font = ImageFont.load_default()
-            except:
-                font = None
-            
-            draw.text((10, 10), "TEST", fill='black', font=font)
-            test_text = pytesseract.image_to_string(test_img, config='--psm 8')
-            
-            if "TEST" in test_text.upper():
-                print("✓ Tesseract is working correctly")
-            else:
-                print(f"⚠ Tesseract test failed: got '{test_text.strip()}'")
-                # Try to fix common issues
-                try:
-                    import subprocess
-                    import sys
-                    
-                    # Try to set PATH for Tesseract
-                    import os
-                    possible_paths = [
-                        "/usr/bin/tesseract",
-                        "/usr/local/bin/tesseract", 
-                        "/opt/render/project/src/.apt/usr/bin/tesseract",
-                        "/app/.apt/usr/bin/tesseract"
-                    ]
-                    
-                    for path in possible_paths:
-                        if os.path.exists(path):
-                            pytesseract.pytesseract.tesseract_cmd = path
-                            print(f"Set Tesseract path to: {path}")
-                            break
-                    
-                    # Test again with correct path
-                    test_text = pytesseract.image_to_string(test_img, config='--psm 8')
-                    if "TEST" in test_text.upper():
-                        print("✓ Tesseract working after path fix")
-                    else:
-                        print("✗ Tesseract still not working properly")
-                        
-                except Exception as path_error:
-                    print(f"Could not fix Tesseract path: {path_error}")
-                    
+            print(f"✓ Tesseract version: {test_result}")
         except Exception as e:
-            print(f"Tesseract not available: {str(e)}")
+            print(f"✗ Tesseract not available: {str(e)}")
             tesseract_available = False
-            
-            # Try to auto-install/configure Tesseract for cloud environments
-            try:
-                print("Attempting to configure Tesseract for cloud environment...")
-                
-                # Check if we're on a cloud platform
-                import platform
-                print(f"Platform: {platform.system()} {platform.release()}")
-                
-                # Try common cloud paths
-                cloud_paths = [
-                    "/usr/bin/tesseract",
-                    "/usr/local/bin/tesseract",
-                    "/opt/render/project/src/.apt/usr/bin/tesseract",
-                    "/app/.apt/usr/bin/tesseract",
-                    "/usr/share/tesseract-ocr",
-                ]
-                
-                for path in cloud_paths:
-                    if os.path.exists(path):
-                        pytesseract.pytesseract.tesseract_cmd = path
-                        print(f"Found Tesseract at: {path}")
-                        
-                        # Test if it works now
-                        try:
-                            test_result = pytesseract.get_tesseract_version()
-                            print(f"Tesseract now working: {test_result}")
-                            tesseract_available = True
-                            break
-                        except:
-                            continue
-                
-                if not tesseract_available:
-                    print("Could not locate working Tesseract installation")
-                    
-            except Exception as config_error:
-                print(f"Tesseract configuration failed: {config_error}")
         
         if tesseract_available:
             # Method 1: Try different PSM modes with various configurations
