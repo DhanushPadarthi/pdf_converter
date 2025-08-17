@@ -83,15 +83,16 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
     try:
         print(f"Processing {image_name} - Size: {pil_image.size}, Mode: {pil_image.mode}")
         
-        # Save debug image (optional)
-        debug_mode = os.getenv('DEBUG_IMAGES', 'false').lower() == 'true'
-        if debug_mode:
-            try:
-                debug_filename = f"debug_{image_name}.png"
-                pil_image.save(debug_filename)
-                print(f"Debug image saved as {debug_filename}")
-            except:
-                pass
+        # Always save debug images for troubleshooting
+        debug_filename = None
+        try:
+            upload_folder = os.path.join(os.getcwd(), 'uploads')
+            os.makedirs(upload_folder, exist_ok=True)
+            debug_filename = os.path.join(upload_folder, f"debug_{image_name}.png")
+            pil_image.save(debug_filename)
+            print(f"Debug image saved as {debug_filename}")
+        except Exception as e:
+            print(f"Could not save debug image: {str(e)}")
         
         # Convert to RGB if necessary
         if pil_image.mode != 'RGB':
@@ -233,7 +234,52 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
                     except Exception as e:
                         continue
         
-        # Method 5: Fallback - try to extract any visible text patterns
+        # Method 5: Try EasyOCR as alternative to Tesseract
+        if not ocr_results:
+            print("Tesseract failed, trying EasyOCR...")
+            try:
+                import easyocr
+                
+                # Initialize EasyOCR reader
+                reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+                
+                # Convert PIL image to numpy array for EasyOCR
+                import numpy as np
+                img_array = np.array(pil_image)
+                
+                # Try EasyOCR
+                try:
+                    easyocr_results = reader.readtext(img_array, detail=0)  # detail=0 returns only text
+                    if easyocr_results:
+                        combined_text = ' '.join(easyocr_results)
+                        if combined_text.strip():
+                            ocr_results.append(("EasyOCR", combined_text.strip()))
+                            print(f"EasyOCR successful: '{combined_text[:50]}...' ({len(combined_text)} chars)")
+                except Exception as e:
+                    print(f"EasyOCR failed: {str(e)}")
+                
+                # Try EasyOCR with different preprocessing if still no results
+                if not ocr_results:
+                    try:
+                        # Convert to grayscale for EasyOCR
+                        gray_img = pil_image.convert('L')
+                        gray_array = np.array(gray_img)
+                        
+                        easyocr_results = reader.readtext(gray_array, detail=0)
+                        if easyocr_results:
+                            combined_text = ' '.join(easyocr_results)
+                            if combined_text.strip():
+                                ocr_results.append(("EasyOCR-Gray", combined_text.strip()))
+                                print(f"EasyOCR grayscale successful: '{combined_text[:50]}...' ({len(combined_text)} chars)")
+                    except Exception as e:
+                        print(f"EasyOCR grayscale failed: {str(e)}")
+                        
+            except ImportError:
+                print("EasyOCR not available - install with 'pip install easyocr'")
+            except Exception as e:
+                print(f"EasyOCR initialization failed: {str(e)}")
+        
+        # Method 6: Fallback - try to extract any visible text patterns
         if not ocr_results:
             print("All OCR methods failed, trying pattern detection...")
             try:
@@ -298,6 +344,35 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
                 if not ocr_results:
                     print(f"Image analysis - Contrast: {contrast:.1f}, Brightness: {mean_brightness:.1f}")
                     
+                    # Try to detect text regions using simple edge detection
+                    try:
+                        from PIL import ImageFilter
+                        edges = gray_pil.filter(ImageFilter.FIND_EDGES)
+                        edge_array = np.array(edges)
+                        edge_density = (edge_array > 0).sum() / edge_array.size
+                        print(f"Edge density: {edge_density:.3f}")
+                        
+                        # Try to save processed images for manual inspection
+                        try:
+                            processed_folder = os.path.join(os.getcwd(), 'uploads', 'processed')
+                            os.makedirs(processed_folder, exist_ok=True)
+                            
+                            # Save different processed versions
+                            gray_pil.save(os.path.join(processed_folder, f"gray_{image_name}.png"))
+                            edges.save(os.path.join(processed_folder, f"edges_{image_name}.png"))
+                            
+                            # Try binary threshold
+                            binary = gray_pil.point(lambda x: 0 if x < 128 else 255, '1')
+                            binary.save(os.path.join(processed_folder, f"binary_{image_name}.png"))
+                            
+                            print(f"Processed images saved to {processed_folder}")
+                            
+                        except Exception as e:
+                            print(f"Could not save processed images: {str(e)}")
+                            
+                    except Exception as e:
+                        print(f"Edge detection failed: {str(e)}")
+                    
                     if contrast > 30:  # Likely has text
                         analysis_text = f"Image contains text-like patterns (Contrast: {contrast:.1f}, Brightness: {mean_brightness:.1f}) but OCR extraction failed.\n"
                         analysis_text += f"This could indicate:\n"
@@ -305,7 +380,12 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
                         analysis_text += f"• Non-standard fonts or handwriting\n"
                         analysis_text += f"• Complex layouts or formatting\n"
                         analysis_text += f"• Image quality issues\n"
+                        analysis_text += f"• OCR engine limitations\n"
                         analysis_text += f"Image size: {pil_image.size[0]}x{pil_image.size[1]} pixels"
+                        
+                        if debug_filename:
+                            analysis_text += f"\nDebug image saved for manual inspection"
+                            
                         ocr_results.append(("Analysis", analysis_text))
                     else:
                         ocr_results.append(("Analysis", f"Low contrast image (Contrast: {contrast:.1f}) - may not contain readable text"))
