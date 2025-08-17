@@ -123,80 +123,112 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
         if tesseract_available:
             # Method 1: Try different PSM modes with various configurations
             psm_configs = [
-                (6, '--psm 6'),
-                (4, '--psm 4'),
-                (3, '--psm 3'),
-                (8, '--psm 8'),
-                (11, '--psm 11'),
-                (12, '--psm 12'),
-                (13, '--psm 13'),
-                (1, '--psm 1'),
+                (6, '--psm 6 --oem 3'),
+                (4, '--psm 4 --oem 3'),
+                (3, '--psm 3 --oem 3'),
+                (8, '--psm 8 --oem 3'),
+                (11, '--psm 11 --oem 3'),
+                (12, '--psm 12 --oem 3'),
+                (13, '--psm 13 --oem 3'),
+                (1, '--psm 1 --oem 3'),
+                (6, '--psm 6 --oem 1'),
+                (6, '--psm 6 --oem 2'),
                 (6, '--psm 6 -c tessedit_char_whitelist=0123456789'),
-                (6, '--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz .,():-'),
+                (6, '--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz .,():-+=[]{}'),
+                (8, '--psm 8 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'),
+                (7, '--psm 7 --oem 3'),
+                (10, '--psm 10 --oem 3'),
             ]
             
             for psm, config in psm_configs:
                 try:
                     ocr_text = pytesseract.image_to_string(pil_image, lang="eng", config=config)
-                    if ocr_text.strip() and len(ocr_text.strip()) > 1:
-                        ocr_results.append((f"PSM {psm}", ocr_text.strip()))
-                        print(f"OCR with {config}: '{ocr_text.strip()[:50]}...' ({len(ocr_text.strip())} chars)")
+                    cleaned_text = ocr_text.strip()
+                    if cleaned_text and len(cleaned_text) > 1 and not cleaned_text.isspace():
+                        ocr_results.append((f"PSM {psm}", cleaned_text))
+                        print(f"OCR with {config}: '{cleaned_text[:50]}...' ({len(cleaned_text)} chars)")
                         break  # Use first successful result
                 except Exception as e:
                     print(f"OCR failed with {config}: {str(e)}")
                     continue
             
-            # Method 2: Try with image preprocessing if no results yet
+            # Method 2: Try with aggressive image preprocessing if no results yet
             if not ocr_results:
                 try:
-                    # Convert to grayscale and enhance contrast
-                    from PIL import ImageEnhance, ImageFilter
+                    from PIL import ImageEnhance, ImageFilter, ImageOps
                     
-                    # Grayscale conversion
-                    gray_image = pil_image.convert('L')
+                    preprocessing_methods = [
+                        ("Grayscale + Contrast", lambda img: ImageEnhance.Contrast(img.convert('L')).enhance(3.0)),
+                        ("Grayscale + Brightness", lambda img: ImageEnhance.Brightness(img.convert('L')).enhance(1.5)),
+                        ("Threshold", lambda img: img.convert('L').point(lambda x: 0 if x < 128 else 255, '1')),
+                        ("Invert + Threshold", lambda img: ImageOps.invert(img.convert('L')).point(lambda x: 0 if x < 128 else 255, '1')),
+                        ("Sharpen + Contrast", lambda img: ImageEnhance.Contrast(img.convert('L').filter(ImageFilter.SHARPEN)).enhance(2.5)),
+                        ("Auto-contrast", lambda img: ImageOps.autocontrast(img.convert('L'))),
+                    ]
                     
-                    # Enhance contrast
-                    enhancer = ImageEnhance.Contrast(gray_image)
-                    enhanced_image = enhancer.enhance(2.0)
-                    
-                    # Try sharpening
-                    sharpened_image = enhanced_image.filter(ImageFilter.SHARPEN)
-                    
-                    for img, name in [(enhanced_image, "Enhanced"), (sharpened_image, "Sharpened")]:
+                    for method_name, preprocess_func in preprocessing_methods:
                         try:
-                            config = '--psm 6'
-                            ocr_text = pytesseract.image_to_string(img, lang="eng", config=config)
-                            if ocr_text.strip():
-                                ocr_results.append((name, ocr_text.strip()))
-                                print(f"OCR with {name}: '{ocr_text.strip()[:50]}...' ({len(ocr_text.strip())} chars)")
+                            processed_img = preprocess_func(pil_image)
+                            
+                            # Try multiple configs on processed image
+                            for config in ['--psm 6 --oem 3', '--psm 8 --oem 3', '--psm 4 --oem 3']:
+                                try:
+                                    ocr_text = pytesseract.image_to_string(processed_img, lang="eng", config=config)
+                                    cleaned_text = ocr_text.strip()
+                                    if cleaned_text and len(cleaned_text) > 1:
+                                        ocr_results.append((f"{method_name}", cleaned_text))
+                                        print(f"OCR with {method_name}: '{cleaned_text[:50]}...' ({len(cleaned_text)} chars)")
+                                        break
+                                except Exception as e:
+                                    continue
+                            
+                            if ocr_results:
                                 break
+                                
                         except Exception as e:
-                            print(f"{name} OCR failed: {str(e)}")
+                            print(f"{method_name} preprocessing failed: {str(e)}")
                             continue
                     
                 except Exception as e:
-                    print(f"Image enhancement failed: {str(e)}")
+                    print(f"Image preprocessing failed: {str(e)}")
             
-            # Method 3: Try simple OCR without config
+            # Method 3: Try different scale factors
             if not ocr_results:
                 try:
-                    ocr_text = pytesseract.image_to_string(pil_image)
-                    if ocr_text.strip():
-                        ocr_results.append(("Simple", ocr_text.strip()))
-                        print(f"Simple OCR: '{ocr_text.strip()[:50]}...' ({len(ocr_text.strip())} chars)")
+                    scale_factors = [1.5, 2.0, 3.0, 4.0]
+                    for scale in scale_factors:
+                        try:
+                            new_size = (int(pil_image.size[0] * scale), int(pil_image.size[1] * scale))
+                            scaled_img = pil_image.resize(new_size, Image.Resampling.LANCZOS)
+                            
+                            # Convert to grayscale and enhance
+                            gray_scaled = scaled_img.convert('L')
+                            enhanced_scaled = ImageEnhance.Contrast(gray_scaled).enhance(2.0)
+                            
+                            config = '--psm 6 --oem 3'
+                            ocr_text = pytesseract.image_to_string(enhanced_scaled, lang="eng", config=config)
+                            cleaned_text = ocr_text.strip()
+                            if cleaned_text and len(cleaned_text) > 1:
+                                ocr_results.append((f"Scale {scale}x", cleaned_text))
+                                print(f"OCR with scale {scale}x: '{cleaned_text[:50]}...' ({len(cleaned_text)} chars)")
+                                break
+                        except Exception as e:
+                            continue
+                    
                 except Exception as e:
-                    print(f"Simple OCR failed: {str(e)}")
+                    print(f"Scaling attempts failed: {str(e)}")
             
             # Method 4: Try different languages if still no results
             if not ocr_results:
-                languages = ['eng', 'eng+deu', 'eng+fra']
+                languages = ['eng', 'eng+deu', 'eng+fra', 'osd']
                 for lang in languages:
                     try:
-                        config = f'--psm 6 -l {lang}'
+                        config = f'--psm 6 --oem 3 -l {lang}'
                         ocr_text = pytesseract.image_to_string(pil_image, config=config)
-                        if ocr_text.strip():
-                            ocr_results.append((f"Lang {lang}", ocr_text.strip()))
-                            print(f"OCR with {lang}: '{ocr_text.strip()[:50]}...' ({len(ocr_text.strip())} chars)")
+                        cleaned_text = ocr_text.strip()
+                        if cleaned_text and len(cleaned_text) > 1:
+                            ocr_results.append((f"Lang {lang}", cleaned_text))
+                            print(f"OCR with {lang}: '{cleaned_text[:50]}...' ({len(cleaned_text)} chars)")
                             break
                     except Exception as e:
                         continue
@@ -215,27 +247,87 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
                 else:
                     gray_array = img_array
                 
-                # Calculate contrast
+                # Calculate contrast and other metrics
                 contrast = gray_array.std()
-                print(f"Image contrast: {contrast}")
+                mean_brightness = gray_array.mean()
                 
-                if contrast > 30:  # Likely has text
-                    ocr_results.append(("Pattern", f"[Image contains text-like patterns but OCR extraction failed. Contrast: {contrast:.1f}]"))
-                else:
-                    ocr_results.append(("Analysis", "[Image appears to be low contrast or may not contain readable text]"))
+                # Try one more aggressive attempt with extreme preprocessing
+                try:
+                    from PIL import ImageOps
+                    
+                    # Convert to pure black and white
+                    gray_pil = pil_image.convert('L')
+                    
+                    # Try different threshold values
+                    thresholds = [100, 128, 150, 180, 200]
+                    for threshold in thresholds:
+                        try:
+                            # Apply threshold
+                            bw_img = gray_pil.point(lambda x: 0 if x < threshold else 255, '1')
+                            
+                            # Try OCR on binary image
+                            config = '--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+                            ocr_text = pytesseract.image_to_string(bw_img, config=config)
+                            cleaned_text = ocr_text.strip()
+                            
+                            if cleaned_text and len(cleaned_text) > 1:
+                                ocr_results.append((f"Threshold {threshold}", cleaned_text))
+                                print(f"OCR with threshold {threshold}: '{cleaned_text[:50]}...' ({len(cleaned_text)} chars)")
+                                break
+                        except Exception as e:
+                            continue
+                    
+                    # If still no results, try inverted image
+                    if not ocr_results:
+                        try:
+                            inverted_img = ImageOps.invert(gray_pil)
+                            config = '--psm 6 --oem 3'
+                            ocr_text = pytesseract.image_to_string(inverted_img, config=config)
+                            cleaned_text = ocr_text.strip()
+                            
+                            if cleaned_text and len(cleaned_text) > 1:
+                                ocr_results.append(("Inverted", cleaned_text))
+                                print(f"OCR with inverted image: '{cleaned_text[:50]}...' ({len(cleaned_text)} chars)")
+                        except Exception as e:
+                            print(f"Inverted OCR failed: {str(e)}")
+                    
+                except Exception as e:
+                    print(f"Aggressive preprocessing failed: {str(e)}")
+                
+                # If still no results, provide detailed analysis
+                if not ocr_results:
+                    print(f"Image analysis - Contrast: {contrast:.1f}, Brightness: {mean_brightness:.1f}")
+                    
+                    if contrast > 30:  # Likely has text
+                        analysis_text = f"Image contains text-like patterns (Contrast: {contrast:.1f}, Brightness: {mean_brightness:.1f}) but OCR extraction failed.\n"
+                        analysis_text += f"This could indicate:\n"
+                        analysis_text += f"• Mathematical symbols or special characters\n"
+                        analysis_text += f"• Non-standard fonts or handwriting\n"
+                        analysis_text += f"• Complex layouts or formatting\n"
+                        analysis_text += f"• Image quality issues\n"
+                        analysis_text += f"Image size: {pil_image.size[0]}x{pil_image.size[1]} pixels"
+                        ocr_results.append(("Analysis", analysis_text))
+                    else:
+                        ocr_results.append(("Analysis", f"Low contrast image (Contrast: {contrast:.1f}) - may not contain readable text"))
                     
             except Exception as e:
                 print(f"Pattern analysis failed: {str(e)}")
-                ocr_results.append(("Fallback", "[Image detected but text extraction failed - check OCR setup]"))
+                ocr_results.append(("Fallback", f"Image detected but text extraction failed - Error: {str(e)}"))
         
         # Return the best result
         if ocr_results:
-            best_method, best_text = max(ocr_results, key=lambda x: len(x[1]) if not x[1].startswith('[') else 0)
+            # Prioritize actual text over analysis messages
+            text_results = [r for r in ocr_results if not r[1].startswith('[') and not r[1].startswith('Image')]
+            if text_results:
+                best_method, best_text = max(text_results, key=lambda x: len(x[1]))
+            else:
+                best_method, best_text = ocr_results[0]  # Use first result (likely analysis)
+            
             print(f"Best OCR result for {image_name} using {best_method}: {len(best_text)} characters")
             return best_text
         else:
             print(f"No text found in {image_name}")
-            return "[Image detected but no text could be extracted]"
+            return f"[Image detected but no text could be extracted from {image_name}]"
             
     except Exception as e:
         print(f"Error processing {image_name}: {str(e)}")
