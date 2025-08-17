@@ -234,50 +234,95 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
                     except Exception as e:
                         continue
         
-        # Method 5: Try EasyOCR as alternative to Tesseract
+        # Method 5: Try EasyOCR as alternative to Tesseract (optional)
         if not ocr_results:
-            print("Tesseract failed, trying EasyOCR...")
+            print("Tesseract failed, trying EasyOCR (if available)...")
             try:
-                import easyocr
-                
-                # Initialize EasyOCR reader
-                reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-                
-                # Convert PIL image to numpy array for EasyOCR
-                import numpy as np
-                img_array = np.array(pil_image)
-                
-                # Try EasyOCR
                 try:
-                    easyocr_results = reader.readtext(img_array, detail=0)  # detail=0 returns only text
-                    if easyocr_results:
-                        combined_text = ' '.join(easyocr_results)
-                        if combined_text.strip():
-                            ocr_results.append(("EasyOCR", combined_text.strip()))
-                            print(f"EasyOCR successful: '{combined_text[:50]}...' ({len(combined_text)} chars)")
-                except Exception as e:
-                    print(f"EasyOCR failed: {str(e)}")
-                
-                # Try EasyOCR with different preprocessing if still no results
-                if not ocr_results:
+                    import easyocr
+                    easyocr_available = True
+                except ImportError:
+                    print("EasyOCR not installed, trying to install...")
                     try:
-                        # Convert to grayscale for EasyOCR
-                        gray_img = pil_image.convert('L')
-                        gray_array = np.array(gray_img)
+                        import subprocess
+                        import sys
+                        subprocess.check_call([sys.executable, "-m", "pip", "install", "easyocr>=1.7.0", "--quiet"])
+                        import easyocr
+                        easyocr_available = True
+                        print("EasyOCR installed successfully")
+                    except Exception as install_error:
+                        print(f"Could not install EasyOCR: {install_error}")
+                        easyocr_available = False
+                
+                if easyocr_available:
+                    try:
+                        # Initialize EasyOCR reader with minimal settings for speed
+                        print("Initializing EasyOCR (downloading models if needed)...")
+                        reader = easyocr.Reader(['en'], gpu=False, verbose=False, download_enabled=True)
                         
-                        easyocr_results = reader.readtext(gray_array, detail=0)
+                        # Convert PIL image to numpy array for EasyOCR
+                        import numpy as np
+                        img_array = np.array(pil_image)
+                        
+                        # Try EasyOCR with optimized settings
+                        print("Running EasyOCR text detection...")
+                        easyocr_results = reader.readtext(
+                            img_array, 
+                            detail=0,  # Only return text, not coordinates
+                            paragraph=True,  # Group text into paragraphs
+                            width_ths=0.7,  # Text width threshold
+                            height_ths=0.7,  # Text height threshold
+                            batch_size=1  # Reduce memory usage
+                        )
+                        
                         if easyocr_results:
                             combined_text = ' '.join(easyocr_results)
                             if combined_text.strip():
-                                ocr_results.append(("EasyOCR-Gray", combined_text.strip()))
-                                print(f"EasyOCR grayscale successful: '{combined_text[:50]}...' ({len(combined_text)} chars)")
+                                ocr_results.append(("EasyOCR", combined_text.strip()))
+                                print(f"EasyOCR successful: '{combined_text[:50]}...' ({len(combined_text)} chars)")
+                        else:
+                            print("EasyOCR completed but found no text")
+                            
                     except Exception as e:
-                        print(f"EasyOCR grayscale failed: {str(e)}")
-                        
-            except ImportError:
-                print("EasyOCR not available - install with 'pip install easyocr'")
+                        print(f"EasyOCR processing failed: {str(e)}")
+                else:
+                    print("EasyOCR not available, skipping...")
+                
             except Exception as e:
-                print(f"EasyOCR initialization failed: {str(e)}")
+                print(f"EasyOCR error: {str(e)}")
+                
+            # If EasyOCR is not available or failed, try enhanced Tesseract
+            if not ocr_results:
+                print("Trying enhanced Tesseract approach...")
+                try:
+                    # Last ditch effort with very simple Tesseract config
+                    simple_configs = [
+                        '--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789',
+                        '--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
+                        '--psm 6 --oem 1',
+                        '--psm 13 --oem 3',
+                        '--psm 7 --oem 3',
+                        '--psm 11 --oem 3'
+                    ]
+                    
+                    for config in simple_configs:
+                        try:
+                            # Use a heavily processed image
+                            gray_img = pil_image.convert('L')
+                            from PIL import ImageEnhance
+                            enhanced = ImageEnhance.Contrast(gray_img).enhance(3.0)
+                            
+                            ocr_text = pytesseract.image_to_string(enhanced, config=config)
+                            if ocr_text.strip() and len(ocr_text.strip()) > 1:
+                                ocr_results.append((f"Enhanced-Tesseract", ocr_text.strip()))
+                                print(f"Enhanced Tesseract worked: '{ocr_text[:30]}...'")
+                                break
+                        except Exception as te:
+                            print(f"Config {config} failed: {str(te)}")
+                            continue
+                            
+                except Exception as e:
+                    print(f"Enhanced Tesseract also failed: {str(e)}")
         
         # Method 6: Fallback - try to extract any visible text patterns
         if not ocr_results:
