@@ -114,12 +114,96 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
         # Check if Tesseract is available first
         tesseract_available = True
         try:
-            # Quick test
+            # Test Tesseract installation
             test_result = pytesseract.get_tesseract_version()
             print(f"Tesseract version: {test_result}")
+            
+            # Test with a simple image
+            test_img = Image.new('RGB', (100, 30), color='white')
+            from PIL import ImageDraw, ImageFont
+            draw = ImageDraw.Draw(test_img)
+            try:
+                font = ImageFont.load_default()
+            except:
+                font = None
+            
+            draw.text((10, 10), "TEST", fill='black', font=font)
+            test_text = pytesseract.image_to_string(test_img, config='--psm 8')
+            
+            if "TEST" in test_text.upper():
+                print("✓ Tesseract is working correctly")
+            else:
+                print(f"⚠ Tesseract test failed: got '{test_text.strip()}'")
+                # Try to fix common issues
+                try:
+                    import subprocess
+                    import sys
+                    
+                    # Try to set PATH for Tesseract
+                    import os
+                    possible_paths = [
+                        "/usr/bin/tesseract",
+                        "/usr/local/bin/tesseract", 
+                        "/opt/render/project/src/.apt/usr/bin/tesseract",
+                        "/app/.apt/usr/bin/tesseract"
+                    ]
+                    
+                    for path in possible_paths:
+                        if os.path.exists(path):
+                            pytesseract.pytesseract.tesseract_cmd = path
+                            print(f"Set Tesseract path to: {path}")
+                            break
+                    
+                    # Test again with correct path
+                    test_text = pytesseract.image_to_string(test_img, config='--psm 8')
+                    if "TEST" in test_text.upper():
+                        print("✓ Tesseract working after path fix")
+                    else:
+                        print("✗ Tesseract still not working properly")
+                        
+                except Exception as path_error:
+                    print(f"Could not fix Tesseract path: {path_error}")
+                    
         except Exception as e:
             print(f"Tesseract not available: {str(e)}")
             tesseract_available = False
+            
+            # Try to auto-install/configure Tesseract for cloud environments
+            try:
+                print("Attempting to configure Tesseract for cloud environment...")
+                
+                # Check if we're on a cloud platform
+                import platform
+                print(f"Platform: {platform.system()} {platform.release()}")
+                
+                # Try common cloud paths
+                cloud_paths = [
+                    "/usr/bin/tesseract",
+                    "/usr/local/bin/tesseract",
+                    "/opt/render/project/src/.apt/usr/bin/tesseract",
+                    "/app/.apt/usr/bin/tesseract",
+                    "/usr/share/tesseract-ocr",
+                ]
+                
+                for path in cloud_paths:
+                    if os.path.exists(path):
+                        pytesseract.pytesseract.tesseract_cmd = path
+                        print(f"Found Tesseract at: {path}")
+                        
+                        # Test if it works now
+                        try:
+                            test_result = pytesseract.get_tesseract_version()
+                            print(f"Tesseract now working: {test_result}")
+                            tesseract_available = True
+                            break
+                        except:
+                            continue
+                
+                if not tesseract_available:
+                    print("Could not locate working Tesseract installation")
+                    
+            except Exception as config_error:
+                print(f"Tesseract configuration failed: {config_error}")
         
         if tesseract_available:
             # Method 1: Try different PSM modes with various configurations
@@ -234,9 +318,65 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
                     except Exception as e:
                         continue
         
-        # Method 5: Skip EasyOCR for now (too slow), try enhanced Tesseract instead
+        # Method 5: Try EasyOCR as a more reliable alternative
         if not ocr_results:
-            print("Initial OCR failed, trying fast enhanced Tesseract...")
+            print("Tesseract failed, trying EasyOCR...")
+            try:
+                try:
+                    import easyocr
+                    easyocr_available = True
+                    print("EasyOCR available")
+                except ImportError:
+                    print("EasyOCR not available, installing...")
+                    try:
+                        import subprocess
+                        import sys
+                        subprocess.check_call([sys.executable, "-m", "pip", "install", "easyocr>=1.7.0", "--quiet"])
+                        import easyocr
+                        easyocr_available = True
+                        print("EasyOCR installed successfully")
+                    except Exception as install_error:
+                        print(f"Could not install EasyOCR: {install_error}")
+                        easyocr_available = False
+                
+                if easyocr_available:
+                    try:
+                        print("Initializing EasyOCR reader...")
+                        reader = easyocr.Reader(['en'], gpu=False, verbose=False, download_enabled=True)
+                        
+                        # Convert PIL image to numpy array for EasyOCR
+                        import numpy as np
+                        img_array = np.array(pil_image)
+                        
+                        print("Running EasyOCR text detection...")
+                        easyocr_results = reader.readtext(
+                            img_array, 
+                            detail=0,  # Only return text, not coordinates
+                            paragraph=True,  # Group text into paragraphs
+                            width_ths=0.7,  # Text width threshold
+                            height_ths=0.7,  # Text height threshold
+                            batch_size=1  # Reduce memory usage
+                        )
+                        
+                        if easyocr_results:
+                            combined_text = ' '.join(easyocr_results)
+                            if combined_text.strip():
+                                ocr_results.append(("EasyOCR", combined_text.strip()))
+                                print(f"EasyOCR successful: '{combined_text[:50]}...' ({len(combined_text)} chars)")
+                        else:
+                            print("EasyOCR completed but found no text")
+                            
+                    except Exception as e:
+                        print(f"EasyOCR processing failed: {str(e)}")
+                else:
+                    print("EasyOCR not available, skipping...")
+                
+            except Exception as e:
+                print(f"EasyOCR error: {str(e)}")
+        
+        # Method 6: If all else fails, try enhanced Tesseract one more time
+        if not ocr_results and tesseract_available:
+            print("Trying enhanced Tesseract as last resort...")
             try:
                 # Quick enhanced Tesseract configs (most likely to work)
                 fast_configs = [
@@ -255,16 +395,16 @@ def process_image_with_ocr(pil_image, image_name="unknown"):
                         
                         ocr_text = pytesseract.image_to_string(enhanced, config=config)
                         if ocr_text.strip() and len(ocr_text.strip()) > 1:
-                            ocr_results.append((f"Fast-Tesseract", ocr_text.strip()))
-                            print(f"Fast Tesseract worked: '{ocr_text[:30]}...'")
+                            ocr_results.append((f"Enhanced-Tesseract", ocr_text.strip()))
+                            print(f"Enhanced Tesseract worked: '{ocr_text[:30]}...'")
                             break
                     except Exception as te:
                         continue
                         
             except Exception as e:
-                print(f"Fast Tesseract failed: {str(e)}")
+                print(f"Enhanced Tesseract failed: {str(e)}")
         
-        # Method 6: Fallback - try to extract any visible text patterns
+        # Method 7: Fallback - try to extract any visible text patterns
         if not ocr_results:
             print("All OCR methods failed, trying pattern detection...")
             try:
@@ -570,9 +710,61 @@ def extract_text_from_page(page):
 
 def test_ocr_functionality():
     """Test if OCR is working properly"""
-    print("Testing OCR functionality...")
+    print("=" * 50)
+    print("COMPREHENSIVE OCR FUNCTIONALITY TEST")
+    print("=" * 50)
+    
     try:
+        # First, check Tesseract availability
+        print("\n1. Testing Tesseract Installation:")
+        try:
+            version = pytesseract.get_tesseract_version()
+            print(f"   ✓ Tesseract version: {version}")
+            tesseract_ok = True
+        except Exception as e:
+            print(f"   ✗ Tesseract not available: {str(e)}")
+            tesseract_ok = False
+            
+            # Try to find Tesseract in common locations
+            import os
+            common_paths = [
+                "/usr/bin/tesseract",
+                "/usr/local/bin/tesseract", 
+                "/opt/render/project/src/.apt/usr/bin/tesseract",
+                "/app/.apt/usr/bin/tesseract"
+            ]
+            
+            for path in common_paths:
+                if os.path.exists(path):
+                    print(f"   Found Tesseract at: {path}")
+                    pytesseract.pytesseract.tesseract_cmd = path
+                    try:
+                        version = pytesseract.get_tesseract_version()
+                        print(f"   ✓ Tesseract working with path: {version}")
+                        tesseract_ok = True
+                        break
+                    except:
+                        continue
+        
+        # Test environment
+        print("\n2. Environment Information:")
+        import platform, sys
+        print(f"   Platform: {platform.system()} {platform.release()}")
+        print(f"   Python: {sys.version}")
+        print(f"   Working directory: {os.getcwd()}")
+        
+        # Check if we can write files
+        try:
+            test_file = "test_write.txt"
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            print("   ✓ File system is writable")
+        except Exception as e:
+            print(f"   ⚠ File system issue: {e}")
+        
         # Create a simple test image with text
+        print("\n3. Creating Test Image:")
         from PIL import Image, ImageDraw, ImageFont
         
         # Create a white image with text
@@ -582,58 +774,122 @@ def test_ocr_functionality():
         # Try to use a font, fall back to default if not available
         try:
             font = ImageFont.truetype("arial.ttf", 32)
+            print("   ✓ Using TrueType font")
         except:
             try:
                 font = ImageFont.load_default()
+                print("   ✓ Using default font")
             except:
                 font = None
+                print("   ⚠ No font available")
         
         draw.text((20, 50), "Test OCR Text 123", fill='black', font=font)
         
         # Save test image for debugging
         try:
             img.save("test_ocr_image.png")
-            print("Test image saved as test_ocr_image.png")
-        except:
-            pass
-        
-        # Test OCR on this image with multiple methods
-        test_results = []
-        
-        # Method 1: Different PSM modes
-        for psm in [6, 8, 7, 13]:
-            try:
-                config = f'--psm {psm}'
-                test_text = pytesseract.image_to_string(img, lang="eng", config=config)
-                if test_text.strip():
-                    test_results.append(f"PSM {psm}: '{test_text.strip()}'")
-            except Exception as e:
-                test_results.append(f"PSM {psm}: Failed - {str(e)}")
-        
-        # Method 2: Simple OCR
-        try:
-            simple_text = pytesseract.image_to_string(img)
-            if simple_text.strip():
-                test_results.append(f"Simple: '{simple_text.strip()}'")
+            print("   ✓ Test image saved as test_ocr_image.png")
         except Exception as e:
-            test_results.append(f"Simple: Failed - {str(e)}")
+            print(f"   ⚠ Could not save test image: {e}")
         
-        print("OCR test results:")
-        for result in test_results:
-            print(f"  {result}")
+        # Test OCR if Tesseract is available
+        if tesseract_ok:
+            print("\n4. Testing Tesseract OCR:")
+            test_results = []
+            
+            # Method 1: Different PSM modes
+            for psm in [6, 8, 7, 13]:
+                try:
+                    config = f'--psm {psm} --oem 3'
+                    test_text = pytesseract.image_to_string(img, lang="eng", config=config)
+                    cleaned = test_text.strip()
+                    if cleaned:
+                        test_results.append(f"PSM {psm}: '{cleaned}'")
+                        print(f"   ✓ PSM {psm}: '{cleaned}'")
+                    else:
+                        print(f"   ✗ PSM {psm}: No text detected")
+                except Exception as e:
+                    print(f"   ✗ PSM {psm}: Failed - {str(e)}")
+            
+            # Method 2: Simple OCR
+            try:
+                simple_text = pytesseract.image_to_string(img)
+                cleaned = simple_text.strip()
+                if cleaned:
+                    test_results.append(f"Simple: '{cleaned}'")
+                    print(f"   ✓ Simple OCR: '{cleaned}'")
+                else:
+                    print("   ✗ Simple OCR: No text detected")
+            except Exception as e:
+                print(f"   ✗ Simple OCR: Failed - {str(e)}")
+            
+            # Check if any method worked
+            success_count = sum(1 for result in test_results if any(word in result.upper() for word in ["TEST", "OCR", "TEXT", "123"]))
+            
+            if success_count > 0:
+                print(f"\n   ✓ Tesseract OCR working! ({success_count} successful methods)")
+                tesseract_success = True
+            else:
+                print("\n   ✗ Tesseract OCR not working - no text detected correctly")
+                tesseract_success = False
+        else:
+            tesseract_success = False
         
-        # Check if any method worked
-        success_count = sum(1 for result in test_results if "Test" in result or "OCR" in result or "123" in result)
+        # Test EasyOCR
+        print("\n5. Testing EasyOCR:")
+        try:
+            import easyocr
+            print("   ✓ EasyOCR available")
+            
+            try:
+                reader = easyocr.Reader(['en'], gpu=False, verbose=False, download_enabled=True)
+                print("   ✓ EasyOCR reader initialized")
+                
+                import numpy as np
+                img_array = np.array(img)
+                easyocr_results = reader.readtext(img_array, detail=0, paragraph=True)
+                
+                if easyocr_results:
+                    combined_text = ' '.join(easyocr_results)
+                    print(f"   ✓ EasyOCR result: '{combined_text}'")
+                    easyocr_success = True
+                else:
+                    print("   ✗ EasyOCR: No text detected")
+                    easyocr_success = False
+                    
+            except Exception as e:
+                print(f"   ✗ EasyOCR processing failed: {str(e)}")
+                easyocr_success = False
+                
+        except ImportError:
+            print("   ⚠ EasyOCR not available")
+            easyocr_success = False
+        except Exception as e:
+            print(f"   ✗ EasyOCR error: {str(e)}")
+            easyocr_success = False
         
-        if success_count > 0:
-            print("✓ OCR is working correctly!")
+        # Final assessment
+        print("\n" + "=" * 50)
+        print("FINAL ASSESSMENT:")
+        print("=" * 50)
+        
+        if tesseract_success or easyocr_success:
+            print("✓ OCR functionality is working!")
+            if tesseract_success:
+                print("  - Tesseract: Working")
+            if easyocr_success:
+                print("  - EasyOCR: Working")
             return True
         else:
-            print("✗ OCR is not working - no text detected correctly")
+            print("✗ OCR functionality is NOT working!")
+            print("  - Tesseract: Failed" if tesseract_ok else "  - Tesseract: Not available")
+            print("  - EasyOCR: Failed" if not easyocr_success else "  - EasyOCR: Not tested")
             return False
             
     except Exception as e:
-        print(f"✗ OCR test failed: {str(e)}")
+        print(f"✗ OCR test completely failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def extract_text_from_page_with_timeout(page, timeout_seconds=60):
@@ -972,6 +1228,34 @@ def debug_job(job_id):
         info['job_status'] = conversion_status[job_id]
     
     return jsonify(info)
+
+@app.route('/test-ocr')
+def test_ocr_endpoint():
+    """Test OCR functionality and return detailed results"""
+    print("OCR test endpoint called")
+    
+    # Capture all print output
+    import io
+    import contextlib
+    
+    f = io.StringIO()
+    with contextlib.redirect_stdout(f):
+        ocr_working = test_ocr_functionality()
+    
+    output = f.getvalue()
+    
+    return f"""
+    <html>
+    <head><title>OCR Test Results</title></head>
+    <body>
+        <h1>OCR Test Results</h1>
+        <h2>Status: {'✓ WORKING' if ocr_working else '✗ NOT WORKING'}</h2>
+        <h3>Detailed Output:</h3>
+        <pre style="background: #f0f0f0; padding: 10px; white-space: pre-wrap;">{output}</pre>
+        <p><a href="/">Back to Home</a></p>
+    </body>
+    </html>
+    """
 
 @app.route('/cleanup')
 def cleanup_files():
