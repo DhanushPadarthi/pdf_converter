@@ -78,102 +78,203 @@ def setup_tesseract():
         print(f"Tesseract test failed: {str(e)}")
         return False
 
+def process_image_with_ocr(pil_image, image_name="unknown"):
+    """Process a PIL image with OCR using multiple methods"""
+    try:
+        print(f"Processing {image_name} - Size: {pil_image.size}, Mode: {pil_image.mode}")
+        
+        # Save debug image (optional)
+        debug_mode = os.getenv('DEBUG_IMAGES', 'false').lower() == 'true'
+        if debug_mode:
+            try:
+                debug_filename = f"debug_{image_name}.png"
+                pil_image.save(debug_filename)
+                print(f"Debug image saved as {debug_filename}")
+            except:
+                pass
+        
+        # Convert to RGB if necessary
+        if pil_image.mode != 'RGB':
+            pil_image = pil_image.convert('RGB')
+            print(f"Converted to RGB mode")
+        
+        # Enhance image for better OCR
+        # Resize if too small
+        if pil_image.size[0] < 300 or pil_image.size[1] < 300:
+            scale_factor = max(300 / pil_image.size[0], 300 / pil_image.size[1])
+            new_size = (int(pil_image.size[0] * scale_factor), int(pil_image.size[1] * scale_factor))
+            pil_image = pil_image.resize(new_size, Image.Resampling.LANCZOS)
+            print(f"Resized image to: {pil_image.size}")
+        
+        # Try different OCR approaches
+        ocr_results = []
+        
+        # Method 1: Direct OCR with different PSM modes
+        psm_modes = [6, 4, 3, 8, 11, 12, 13]
+        for psm in psm_modes:
+            try:
+                config = f'--psm {psm}'
+                ocr_text = pytesseract.image_to_string(pil_image, lang="eng", config=config)
+                if ocr_text.strip() and len(ocr_text.strip()) > 2:
+                    ocr_results.append((f"PSM {psm}", ocr_text.strip()))
+                    print(f"OCR with PSM {psm}: {len(ocr_text.strip())} characters")
+                    break
+            except Exception as e:
+                continue
+        
+        # Method 2: Try with image preprocessing
+        if not ocr_results:
+            try:
+                # Convert to grayscale and enhance contrast
+                from PIL import ImageEnhance
+                gray_image = pil_image.convert('L')
+                enhancer = ImageEnhance.Contrast(gray_image)
+                enhanced_image = enhancer.enhance(2.0)
+                
+                config = '--psm 6'
+                ocr_text = pytesseract.image_to_string(enhanced_image, lang="eng", config=config)
+                if ocr_text.strip():
+                    ocr_results.append(("Enhanced", ocr_text.strip()))
+                    print(f"OCR with enhancement: {len(ocr_text.strip())} characters")
+            except Exception as e:
+                print(f"Enhanced OCR failed: {str(e)}")
+        
+        # Method 3: Try simple OCR without config
+        if not ocr_results:
+            try:
+                ocr_text = pytesseract.image_to_string(pil_image)
+                if ocr_text.strip():
+                    ocr_results.append(("Simple", ocr_text.strip()))
+                    print(f"Simple OCR: {len(ocr_text.strip())} characters")
+            except Exception as e:
+                print(f"Simple OCR failed: {str(e)}")
+        
+        # Method 4: Try with different character whitelist
+        if not ocr_results:
+            try:
+                config = '--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz .,():-'
+                ocr_text = pytesseract.image_to_string(pil_image, lang="eng", config=config)
+                if ocr_text.strip():
+                    ocr_results.append(("Whitelist", ocr_text.strip()))
+                    print(f"OCR with whitelist: {len(ocr_text.strip())} characters")
+            except Exception as e:
+                print(f"Whitelist OCR failed: {str(e)}")
+        
+        # Return the best result
+        if ocr_results:
+            best_method, best_text = max(ocr_results, key=lambda x: len(x[1]))
+            print(f"Best OCR result for {image_name} using {best_method}: {len(best_text)} characters")
+            return best_text
+        else:
+            print(f"No text found in {image_name}")
+            return ""
+            
+    except Exception as e:
+        print(f"Error processing {image_name}: {str(e)}")
+        return ""
+
 def extract_text_from_page(page):
     """Extract text from both regular text and images in a PDF page"""
     regular_text = page.get_text().strip()
     image_text = ""
     
-    # First, try to get images from the page
+    # First, try to get images from the page using multiple methods
     try:
-        image_list = page.get_images()
-        print(f"Found {len(image_list)} images on page")
+        # Method 1: Get image list (most common)
+        image_list = page.get_images(full=True)
+        print(f"Method 1 - Found {len(image_list)} images in image list")
         
+        # Method 2: Check for drawing objects that might contain images
+        drawings = page.get_drawings()
+        print(f"Method 2 - Found {len(drawings)} drawing objects")
+        
+        # Method 3: Check page dictionary for image blocks
+        page_dict = page.get_text("dict")
+        image_blocks = []
+        for block in page_dict.get("blocks", []):
+            if "type" in block and block["type"] == 1:  # Image block
+                image_blocks.append(block)
+        print(f"Method 3 - Found {len(image_blocks)} image blocks in page dict")
+        
+        # Method 4: Check page contents for image references
+        try:
+            page_obj = page.get_contents()
+            if page_obj:
+                content_stream = page_obj[0].get_buffer()
+                if b"/Im" in content_stream or b"/Image" in content_stream or b"Do" in content_stream:
+                    print("Method 4 - Found image references in page contents")
+        except:
+            pass
+        
+        # If no images found with standard method, try alternative approach
+        if not image_list:
+            print("No images found with standard method, trying alternative extraction...")
+            # Try to render the page and check if it contains non-text content
+            try:
+                # Get page as pixmap to check for visual content
+                mat = fitz.Matrix(1.0, 1.0)
+                pix = page.get_pixmap(matrix=mat)
+                
+                # If page has visual content but no extractable text, it might be all images
+                if pix.size > 0 and len(regular_text) < 50:
+                    print("Page appears to contain mainly visual content, treating as image")
+                    # Render page at higher resolution for OCR
+                    mat = fitz.Matrix(2.0, 2.0)
+                    pix = page.get_pixmap(matrix=mat)
+                    img_data = pix.tobytes("png")
+                    pil_image = Image.open(io.BytesIO(img_data))
+                    
+                    # Process as full page image
+                    ocr_text = process_image_with_ocr(pil_image, "full_page")
+                    if ocr_text and ocr_text.strip():
+                        image_text += f"\n[Text from full page image:]\n{ocr_text.strip()}\n"
+                        print(f"Extracted text from full page: {len(ocr_text)} characters")
+                    
+                    pix = None
+            except Exception as e:
+                print(f"Alternative extraction failed: {str(e)}")
+        
+        # Process individual images from image_list
         for img_index, img in enumerate(image_list):
             try:
                 xref = img[0]
+                print(f"Processing image {img_index + 1} with xref {xref}")
                 
-                # Try to extract the image
-                base_image = page.parent.extract_image(xref)
-                image_bytes = base_image["image"]
-                image_ext = base_image["ext"]
+                # Try to extract the image using different methods
+                try:
+                    # Method A: extract_image (newer PyMuPDF)
+                    base_image = page.parent.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    image_ext = base_image["ext"]
+                    print(f"Image {img_index + 1}: format={image_ext}, size={len(image_bytes)} bytes")
+                    
+                    # Convert to PIL Image
+                    pil_image = Image.open(io.BytesIO(image_bytes))
+                    
+                except:
+                    # Method B: Pixmap extraction (fallback)
+                    print("Using pixmap fallback for image extraction")
+                    pix = fitz.Pixmap(page.parent, xref)
+                    
+                    if pix.n - pix.alpha < 4:
+                        img_data = pix.tobytes("png")
+                        pil_image = Image.open(io.BytesIO(img_data))
+                    else:
+                        # Convert CMYK to RGB
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+                        img_data = pix.tobytes("png")
+                        pil_image = Image.open(io.BytesIO(img_data))
+                    
+                    pix = None
                 
-                print(f"Image {img_index + 1}: format={image_ext}, size={len(image_bytes)} bytes")
-                
-                # Convert to PIL Image
-                pil_image = Image.open(io.BytesIO(image_bytes))
                 print(f"PIL Image - Size: {pil_image.size}, Mode: {pil_image.mode}")
                 
-                # Save debug image (optional)
-                debug_mode = os.getenv('DEBUG_IMAGES', 'false').lower() == 'true'
-                if debug_mode:
-                    try:
-                        debug_filename = f"debug_image_{img_index + 1}.png"
-                        pil_image.save(debug_filename)
-                        print(f"Debug image saved as {debug_filename}")
-                    except:
-                        pass
+                # Process the image with OCR
+                ocr_text = process_image_with_ocr(pil_image, f"image_{img_index + 1}")
                 
-                # Convert to RGB if necessary
-                if pil_image.mode != 'RGB':
-                    pil_image = pil_image.convert('RGB')
-                    print(f"Converted to RGB mode")
-                
-                # Enhance image for better OCR
-                # Resize if too small
-                if pil_image.size[0] < 300 or pil_image.size[1] < 300:
-                    scale_factor = max(300 / pil_image.size[0], 300 / pil_image.size[1])
-                    new_size = (int(pil_image.size[0] * scale_factor), int(pil_image.size[1] * scale_factor))
-                    pil_image = pil_image.resize(new_size, Image.Resampling.LANCZOS)
-                    print(f"Resized image to: {pil_image.size}")
-                
-                # Try different OCR approaches
-                ocr_results = []
-                
-                # Method 1: Direct OCR with different PSM modes
-                psm_modes = [6, 4, 3, 8, 11, 12, 13]
-                for psm in psm_modes:
-                    try:
-                        config = f'--psm {psm} -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-                        ocr_text = pytesseract.image_to_string(pil_image, lang="eng", config=config)
-                        if ocr_text.strip() and len(ocr_text.strip()) > 2:
-                            ocr_results.append((f"PSM {psm}", ocr_text.strip()))
-                            print(f"OCR with PSM {psm}: {len(ocr_text.strip())} characters")
-                            break
-                    except Exception as e:
-                        continue
-                
-                # Method 2: Try with image preprocessing
-                if not ocr_results:
-                    try:
-                        # Convert to grayscale and enhance contrast
-                        from PIL import ImageEnhance
-                        gray_image = pil_image.convert('L')
-                        enhancer = ImageEnhance.Contrast(gray_image)
-                        enhanced_image = enhancer.enhance(2.0)
-                        
-                        config = '--psm 6'
-                        ocr_text = pytesseract.image_to_string(enhanced_image, lang="eng", config=config)
-                        if ocr_text.strip():
-                            ocr_results.append(("Enhanced", ocr_text.strip()))
-                            print(f"OCR with enhancement: {len(ocr_text.strip())} characters")
-                    except Exception as e:
-                        print(f"Enhanced OCR failed: {str(e)}")
-                
-                # Method 3: Try simple OCR without config
-                if not ocr_results:
-                    try:
-                        ocr_text = pytesseract.image_to_string(pil_image)
-                        if ocr_text.strip():
-                            ocr_results.append(("Simple", ocr_text.strip()))
-                            print(f"Simple OCR: {len(ocr_text.strip())} characters")
-                    except Exception as e:
-                        print(f"Simple OCR failed: {str(e)}")
-                
-                # Use the best result
-                if ocr_results:
-                    best_method, best_text = max(ocr_results, key=lambda x: len(x[1]))
-                    image_text += f"\n[Text from image {img_index + 1} using {best_method}:]\n{best_text}\n"
-                    print(f"Successfully extracted text from image {img_index + 1}: {len(best_text)} characters")
+                if ocr_text and ocr_text.strip():
+                    image_text += f"\n[Text from image {img_index + 1}:]\n{ocr_text.strip()}\n"
+                    print(f"Successfully extracted text from image {img_index + 1}: {len(ocr_text)} characters")
                 else:
                     print(f"No text found in image {img_index + 1}")
                     
@@ -201,7 +302,7 @@ def extract_text_from_page(page):
                     page_ocr_text = pytesseract.image_to_string(pil_image, lang="eng", config=config)
                     if page_ocr_text.strip() and len(page_ocr_text.strip()) > 10:
                         print(f"Full page OCR successful with PSM {psm}: {len(page_ocr_text)} characters")
-                        return page_ocr_text.strip(), f"Full page OCR (PSM {psm})"
+                        return page_ocr_text.strip(), f"Full page OCR (PSM {psm})", True, True
                 except Exception as e:
                     continue
             
@@ -210,20 +311,31 @@ def extract_text_from_page(page):
         except Exception as ocr_error:
             print(f"Full page OCR failed: {str(ocr_error)}")
     
+    # Count images found
+    total_images = len(image_list)
+    if total_images == 0 and len(regular_text) < 50:
+        # Might be a visual-heavy page, count as having images
+        total_images = 1
+    
     # Combine results
     combined_text = regular_text
     if image_text:
         combined_text = regular_text + "\n" + image_text
     
     extraction_method = "Text"
+    has_images = total_images > 0
+    used_ocr = False
+    
     if image_text and regular_text:
         extraction_method = "Text + Image OCR"
+        used_ocr = True
     elif image_text and not regular_text:
         extraction_method = "Image OCR only"
+        used_ocr = True
     elif not regular_text and not image_text:
         extraction_method = "No text found"
     
-    return combined_text.strip(), extraction_method
+    return combined_text.strip(), extraction_method, has_images, used_ocr
 
 def test_ocr_functionality():
     """Test if OCR is working properly"""
@@ -338,12 +450,12 @@ def convert_pdf_to_word_web(pdf_path, output_path, job_id):
             
             # Extract text
             page = pdf_document[page_num]
-            text, extraction_method = extract_text_from_page(page)
+            text, extraction_method, has_images, used_ocr = extract_text_from_page(page)
             
             # Track extraction methods
-            if "Image OCR" in extraction_method:
+            if used_ocr:
                 pages_with_ocr += 1
-            if "image" in text.lower() or "[text from image" in text:
+            if has_images:
                 pages_with_images += 1
             
             if text:

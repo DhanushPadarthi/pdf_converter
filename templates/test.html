@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Download Test</title>
+</head>
+<body>
+    <h1>PDF Converter Download Test</h1>
+    
+    <p>Test download functionality:</p>
+    <a href="/test-download" target="_blank">Test Download Existing File</a>
+    
+    <br><br>
+    
+    <h2>Available Files:</h2>
+    <div id="files"></div>
+    
+    <br><br>
+    
+    <h2>Debug Information:</h2>
+    <button onclick="loadDebugInfo()">Get Debug Info</button>
+    <pre id="debugInfo"></pre>
+    
+    <script>
+        function loadDebugInfo() {
+            // First, let's see what files exist
+            fetch('/debug/test')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('debugInfo').textContent = JSON.stringify(data, null, 2);
+            })
+            .catch(error => {
+                document.getElementById('debugInfo').textContent = 'Error: ' + error;
+            });
+        }
+        
+        // Load files on page load
+        loadDebugInfo();
+    </script>
+</body>
+</html>
